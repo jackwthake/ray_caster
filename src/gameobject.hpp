@@ -24,11 +24,11 @@ public:
 
     static void tick_objs(float dt);
     static void render_objs();
-private:
+protected:
     unsigned ID;
     float x, y;
     bool is_active;
-
+private:
     static unsigned CURR_OBJ;
     static std::unordered_map<unsigned, GameObject*> objs;
 };
