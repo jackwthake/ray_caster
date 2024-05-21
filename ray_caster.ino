@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#define SECONDS(VOID) millis() / 1000
+
 /* globals */
 Adafruit_Arcada arcada;
 uint16_t *framebuffer;
@@ -9,12 +11,15 @@ uint16_t *framebuffer;
 int width, height;
 
 /* statics */
-static const double tick_interval = .01;
-static double acc = 0.00, curr_time;
+static const float tick_interval = 0.05;
+static float acc = 0.00, curr_time, elapsed = 0.0;
+static int frames = 0, ticks = 0;
 
 void setup(void) {
     while (!Serial); delay(100); // wait for coms
     Serial.begin(9600);
+
+    curr_time = SECONDS();
 
     if (!arcada.arcadaBegin()) { // init libraries
         Serial.println("Failed to initialize Adafruit_Arcada.");
@@ -30,24 +35,29 @@ void setup(void) {
         Serial.printf("Failed to initialize screenbuffer of size %d x %d\n", width, height);
     }
 
-    Serial.printf("Screenbuffer initialized to %d x %d", width, height);
-    curr_time = millis();
+    framebuffer = arcada.getFrameBuffer();
+    Serial.printf("Screenbuffer initialized to %d x %d\n", width, height);
 }
 
 void loop(void) {
-    double new_time = millis();
-    double frame_time = new_time - curr_time;
-    double fps = 1.0 / frame_time;
+    float new_time = SECONDS();
+    float frame_time = new_time - curr_time;
     curr_time = new_time;
 
     acc += frame_time;
-    while (acc >= tick_interval) {
+    while (acc >= tick_interval) { // fixed timestep
+        Serial.printf("FPS: %f, TPS: %f, Elapsed: %f\n", frames / elapsed, ticks / elapsed, elapsed);
+
         /* tick game */
-        Serial.printf("FPS: %f\n", fps);
+        acc -= tick_interval;
+        elapsed += tick_interval;
+        ++ticks;
     }
+
 
     /* clear framebuffer */
     memset(framebuffer, 0x00, width * height * sizeof(uint16_t));
     /* render game */
     arcada.blitFrameBuffer(0, 0, false, false);
+    ++frames;
 }
