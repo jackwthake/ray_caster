@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "src/gameobject.hpp"
+
 #define SECONDS(VOID) millis() / 1000
 
 /* globals */
@@ -9,6 +11,14 @@ Adafruit_Arcada arcada;
 uint16_t *framebuffer;
 
 int width, height;
+
+class test : public GameObject {
+public:
+    test() : GameObject(0, 0) {}
+
+    void tick(float dt) { Serial.println("Test tick!"); }
+    void render() { Serial.println("Test Render!"); }
+};
 
 /* statics */
 static const float tick_interval = 0.05;
@@ -37,6 +47,8 @@ void setup(void) {
 
     framebuffer = arcada.getFrameBuffer();
     Serial.printf("Screenbuffer initialized to %d x %d\n", width, height);
+
+    GameObject::add_obj(new test());
 }
 
 void loop(void) {
@@ -48,6 +60,12 @@ void loop(void) {
     while (acc >= tick_interval) { // fixed timestep
         Serial.printf("FPS: %f, TPS: %f, Elapsed: %f\n", frames / elapsed, ticks / elapsed, elapsed);
 
+        GameObject::tick_objs(tick_interval);
+
+        if (arcada.readButtons() & ARCADA_BUTTONMASK_A) {
+            GameObject::destroy_obj(1);
+        }
+
         /* tick game */
         acc -= tick_interval;
         elapsed += tick_interval;
@@ -57,7 +75,10 @@ void loop(void) {
 
     /* clear framebuffer */
     memset(framebuffer, 0x00, width * height * sizeof(uint16_t));
+    
     /* render game */
+    GameObject::render_objs();
+
     arcada.blitFrameBuffer(0, 0, false, false);
     ++frames;
 }
