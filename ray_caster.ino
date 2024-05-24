@@ -1,35 +1,35 @@
 #include "Adafruit_Arcada.h"
 
+#include <FastLED.h>
 #include <stdint.h>
 
 /* globals */
 Adafruit_Arcada arcada;
 uint16_t *framebuffer;
 
-int width, height;
-
-/* statics */
-static const int JOYSTICK_THRESH = 20; // Joystick Values range from -512 to 511
-static const unsigned long tick_interval = 20;
-static unsigned long last_refr = 0.0;
-
+int width, height, ticks = 0, frames = 0;
 struct player_t *player;
 
-int game_map[8][8] = {
+/* constants */
+static const int JOYSTICK_THRESH = 20; // Joystick Values range from -512 to 511
+static const unsigned long TPS_TARGET = 20;
+
+const int game_map[8][8] = {
     {1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 0, 0, 0, 1, 0, 1, 1},
+    {1, 0, 0, 0, 1, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0, 0, 1},
     {1, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 1, 0, 1},
     {1, 0, 0, 0, 0, 0, 0, 1},
-    {1, 1, 1, 1, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0, 0, 1},
     {1, 1, 1, 1, 1, 1, 1, 1},
 };
 
 
 struct player_t {
-    float x = 1.0, y = 1.0;
+    float x = 2.0, y = 2.0;
     
+    /* camera vars */
     std::pair<double, double> dir = std::make_pair(-1, 0.0);
     std::pair<double, double> cam_plane = std::make_pair(0.0, 0.66);
 
@@ -37,6 +37,7 @@ struct player_t {
 };
 
 
+/* convert rgb values to  RGB 565 format */
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
     uint16_t BGRColor = b >> 3;
     BGRColor         |= (g & 0xFC) << 3;
@@ -46,11 +47,13 @@ static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 
+/* set pixel color in framebuffer*/
 static void set_pixel(int x, int y, uint16_t color) {
     framebuffer[y * width  + x] = color;
 }
 
 
+/* draw a vertical line at a given x coordinate with a given height centered on the screen's y-axis */
 static void draw_line(int x, int line_height, uint16_t color) {
     int draw_start = -line_height / 2 + height / 2;
     int draw_end = line_height / 2 + height / 2;
@@ -59,7 +62,7 @@ static void draw_line(int x, int line_height, uint16_t color) {
     if (draw_end >= height) draw_end = height - 1;
 
     for (int y = draw_start; y < draw_end; ++y) {
-        framebuffer[y * width + x] = color;
+        set_pixel(x, y, color);
     }
 }
 
@@ -67,36 +70,33 @@ static void draw_line(int x, int line_height, uint16_t color) {
 /***
  * Player Code
 */
-void player_tick() {
+void player_tick(float move_scaler) {
     uint32_t buttons = arcada.readButtons();
     int16_t joystick_x = arcada.readJoystickX();
     int16_t joystick_y = arcada.readJoystickY();
 
     double old_dir = player->dir.first, old_plane = player->cam_plane.first;
-    double rot_speed = (player->rot_speed) /** abs(joystick_x) / 512*/ * (joystick_x > 0 ? -1 : 1);
-    double mov_spd = (player->move_speed) /** abs(joystick_y) / 512*/;
+
+    /* modulate speed by the joystick */
+    double rot_speed = (player->rot_speed * move_scaler) * (1 + abs(joystick_x) / 512) * (joystick_x > 0 ? -1 : 1);
+    double mov_spd = (player->move_speed * move_scaler) * (1 + abs(joystick_y) / 512) * (joystick_y > 0 ? -1 : 1);
 
     /* Look left and right */
     if (joystick_x < -JOYSTICK_THRESH || joystick_x > JOYSTICK_THRESH) {
         player->dir = std::make_pair(player->dir.first * cos(rot_speed) - player->dir.second * sin(rot_speed),
-                                           old_dir * sin(rot_speed) + player->dir.second * cos(rot_speed));
+                                     old_dir * sin(rot_speed) + player->dir.second * cos(rot_speed));
+
         player->cam_plane = std::make_pair(player->cam_plane.first * cos(rot_speed) - player->cam_plane.second * sin(rot_speed),
-                                                     old_plane * sin(rot_speed) + player->cam_plane.second * cos(rot_speed));
+                                           old_plane * sin(rot_speed) + player->cam_plane.second * cos(rot_speed));
     }
 
-    /* TODO: FIx Movement */
-    if (joystick_y > JOYSTICK_THRESH) {
-        if (game_map[(int)player->y][(int)(player->x + player->dir.first * mov_spd)] == false)
+    if (joystick_y < -JOYSTICK_THRESH || joystick_y > JOYSTICK_THRESH) {
+        if(game_map[(int)(player->y)][(int)(player->x + player->dir.first * mov_spd)] < 1) {
             player->x += player->dir.first * mov_spd;
-        if (game_map[(int)(player->y * player->dir.second * mov_spd)][(int)player->x] == false)
+        }
+        if(game_map[(int)(player->y + player->dir.second * mov_spd)][(int)(player->x)] < 1) {
             player->y += player->dir.second * mov_spd;
-    }
-
-    if (joystick_y < -JOYSTICK_THRESH) {
-        if (game_map[(int)player->y][(int)(player->x + player->dir.first * -mov_spd)] == false)
-            player->x += player->dir.first * -mov_spd;
-        if (game_map[(int)(player->y * player->dir.second * -mov_spd)][(int)player->x] == false)
-            player->y += player->dir.second * -mov_spd;
+        }
     }
 }
 
@@ -146,7 +146,7 @@ void render() {
             }
 
             /* Check for hit */
-            if (game_map[map_pos.first][map_pos.second] > 0)
+            if (game_map[map_pos.second][map_pos.first] > 0)
                 hit = true;
         }
 
@@ -170,7 +170,7 @@ void setup(void) {
     Serial.begin(9600);
 
     if (!arcada.arcadaBegin()) { // init libraries
-        Serial.println("Failed to initialize Adafruit_Arcada.");
+        Serial.println("Failed to initialize Adafruit_Arcada.h");
         for (;;);
     }
 
@@ -189,13 +189,23 @@ void setup(void) {
     player = new player_t();
 }
 
-void loop(void) {
-    if (millis() - last_refr >= tick_interval) {
-        Serial.println(millis() - last_refr);
-        last_refr += tick_interval;
 
-        player_tick();
-    }
+void loop(void) {
+    /* Tick the game approx every 20ms */
+    EVERY_N_MILLISECONDS(TPS_TARGET) {
+        player_tick(0.075);
+
+        ++ticks;
+    };
+
+    /* Report debug info */
+    EVERY_N_SECONDS(1) {
+        Serial.printf("FPS: %f, TPS: %f, Elapsed: %lds\n", 
+                      (frames / (float)millis()) * 1000, 
+                      (ticks / (float)millis()) * 1000, 
+                      millis() / 1000);
+        Serial.printf("x: %f, y: %f\n", player->x, player->y);
+    };
 
 
     /* clear framebuffer */
@@ -203,4 +213,5 @@ void loop(void) {
     render();
     /* render game */
     arcada.blitFrameBuffer(0, 0, false, false);
+    ++frames;
 }
